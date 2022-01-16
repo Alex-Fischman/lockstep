@@ -4,30 +4,6 @@ use winit::{
 	window::Window,
 };
 
-#[repr(C)]
-struct Uniforms {
-	aspect_ratio: f32,
-}
-
-impl Uniforms {
-	fn new() -> Uniforms {
-		Uniforms { aspect_ratio: 1.0 }
-	}
-
-	fn update(&mut self, window: &winit::window::Window) {
-		self.aspect_ratio = window.inner_size().height as f32 / window.inner_size().width as f32;
-	}
-
-	fn as_bytes(&self) -> &[u8] {
-		unsafe {
-			std::slice::from_raw_parts(
-				(self as *const Uniforms) as *const u8,
-				std::mem::size_of::<Uniforms>(),
-			)
-		}
-	}
-}
-
 async fn run(event_loop: EventLoop<()>, window: Window) {
 	let size = window.inner_size();
 	let instance = wgpu::Instance::new(wgpu::Backends::all());
@@ -42,15 +18,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 		.expect("Failed to find an appropriate adapter");
 
 	let (device, queue) = adapter
-		.request_device(
-			&wgpu::DeviceDescriptor {
-				label: None,
-				features: wgpu::Features::empty(),
-				limits: wgpu::Limits::downlevel_webgl2_defaults()
-					.using_resolution(adapter.limits()),
-			},
-			None,
-		)
+		.request_device(&wgpu::DeviceDescriptor::default(), None)
 		.await
 		.expect("Failed to create device");
 
@@ -59,43 +27,73 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 		source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
 	});
 
+	const EXTENT: wgpu::Extent3d =
+		wgpu::Extent3d { width: 256, height: 256, depth_or_array_layers: 1 };
+	let texture = device.create_texture(&wgpu::TextureDescriptor {
+		label: None,
+		size: EXTENT,
+		mip_level_count: 1,
+		sample_count: 1,
+		dimension: wgpu::TextureDimension::D2,
+		format: wgpu::TextureFormat::Rgba8Unorm,
+		usage: wgpu::TextureUsages::TEXTURE_BINDING
+			| wgpu::TextureUsages::RENDER_ATTACHMENT
+			| wgpu::TextureUsages::COPY_DST,
+	});
+	let mut texels = [0xFF; (EXTENT.width * EXTENT.height * 4) as usize];
+	for i in 0..EXTENT.height {
+		for j in 0..EXTENT.width {
+			for k in 0..4 {
+				if k != 3 {
+					texels[((i * EXTENT.width + j) * 4 + k) as usize] = 128;
+				}
+			}
+		}
+	}
+	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+	queue.write_texture(
+        texture.as_image_copy(),
+        &texels,
+        wgpu::ImageDataLayout {
+            offset: 0,
+            bytes_per_row: Some(std::num::NonZeroU32::new(EXTENT.width * 4).unwrap()),
+            rows_per_image: None,
+        },
+        EXTENT,
+    );
+
 	let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 		label: None,
-		entries: &[wgpu::BindGroupLayoutEntry {
-			binding: 0,
-			visibility: wgpu::ShaderStages::FRAGMENT,
-			ty: wgpu::BindingType::Buffer {
-				ty: wgpu::BufferBindingType::Uniform,
-				has_dynamic_offset: false,
-				min_binding_size: None,
+		entries: &[
+			wgpu::BindGroupLayoutEntry {
+				binding: 0,
+				visibility: wgpu::ShaderStages::FRAGMENT,
+				ty: wgpu::BindingType::Texture {
+					multisampled: false,
+					sample_type: wgpu::TextureSampleType::Float { filterable: false },
+					view_dimension: wgpu::TextureViewDimension::D2,
+				},
+				count: None,
 			},
-			count: None,
-		}],
+		],
 	});
+	let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+		layout: &bind_group_layout,
+		entries: &[
+			wgpu::BindGroupEntry {
+				binding: 0,
+				resource: wgpu::BindingResource::TextureView(&view),
+			},
+		],
+		label: None,
+	});
+
 	let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
 		label: None,
 		bind_group_layouts: &[&bind_group_layout],
 		push_constant_ranges: &[],
 	});
-
-	let mut uniforms = Uniforms::new();
-	let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-		label: Some("Uniform Buffer"),
-		size: uniforms.as_bytes().len() as u64,
-		usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-		mapped_at_creation: false,
-	});
-	let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-		layout: &bind_group_layout,
-		entries: &[wgpu::BindGroupEntry {
-			binding: 0,
-			resource: uniform_buffer.as_entire_binding(),
-		}],
-		label: None,
-	});
-
 	let swapchain_format = surface.get_preferred_format(&adapter).unwrap();
-
 	let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
 		label: None,
 		layout: Some(&pipeline_layout),
@@ -129,8 +127,6 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 				config.width = size.width;
 				config.height = size.height;
 				surface.configure(&device, &config);
-				uniforms.update(&window);
-				queue.write_buffer(&uniform_buffer, 0, uniforms.as_bytes());
 			}
 			Event::RedrawRequested(_) => {
 				let frame = surface
