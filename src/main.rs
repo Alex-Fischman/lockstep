@@ -43,48 +43,45 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 	let mut texels = [0xFF; (EXTENT.width * EXTENT.height * 4) as usize];
 	for i in 0..EXTENT.height {
 		for j in 0..EXTENT.width {
-			for k in 0..4 {
-				if k != 3 {
-					texels[((i * EXTENT.width + j) * 4 + k) as usize] = 128;
-				}
-			}
+			texels[((i * EXTENT.width + j) * 4 + 0) as usize] =
+				(j as f32 / EXTENT.width as f32 * 255.0) as u8;
+			texels[((i * EXTENT.width + j) * 4 + 1) as usize] =
+				(i as f32 / EXTENT.height as f32 * 255.0) as u8;
+			texels[((i * EXTENT.width + j) * 4 + 2) as usize] = 0;
+			texels[((i * EXTENT.width + j) * 4 + 3) as usize] = 255;
 		}
 	}
 	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 	queue.write_texture(
-        texture.as_image_copy(),
-        &texels,
-        wgpu::ImageDataLayout {
-            offset: 0,
-            bytes_per_row: Some(std::num::NonZeroU32::new(EXTENT.width * 4).unwrap()),
-            rows_per_image: None,
-        },
-        EXTENT,
-    );
+		texture.as_image_copy(),
+		&texels,
+		wgpu::ImageDataLayout {
+			offset: 0,
+			bytes_per_row: Some(std::num::NonZeroU32::new(EXTENT.width * 4).unwrap()),
+			rows_per_image: None,
+		},
+		EXTENT,
+	);
 
 	let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 		label: None,
-		entries: &[
-			wgpu::BindGroupLayoutEntry {
-				binding: 0,
-				visibility: wgpu::ShaderStages::FRAGMENT,
-				ty: wgpu::BindingType::Texture {
-					multisampled: false,
-					sample_type: wgpu::TextureSampleType::Float { filterable: false },
-					view_dimension: wgpu::TextureViewDimension::D2,
-				},
-				count: None,
+		entries: &[wgpu::BindGroupLayoutEntry {
+			binding: 0,
+			visibility: wgpu::ShaderStages::FRAGMENT,
+			ty: wgpu::BindingType::Texture {
+				multisampled: false,
+				sample_type: wgpu::TextureSampleType::Float { filterable: false },
+				view_dimension: wgpu::TextureViewDimension::D2,
 			},
-		],
+			count: None,
+		}],
 	});
 	let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
 		layout: &bind_group_layout,
-		entries: &[
-			wgpu::BindGroupEntry {
-				binding: 0,
-				resource: wgpu::BindingResource::TextureView(&view),
-			},
-		],
+		entries: &[wgpu::BindGroupEntry {
+			binding: 0,
+			resource: wgpu::BindingResource::TextureView(&view),
+		}],
 		label: None,
 	});
 
