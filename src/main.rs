@@ -1,3 +1,5 @@
+mod sdf;
+
 use winit::{
 	event::{Event, WindowEvent},
 	event_loop::{ControlFlow, EventLoop},
@@ -41,16 +43,23 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 			| wgpu::TextureUsages::COPY_DST,
 	});
 	let mut texels = [0xFF; (EXTENT.width * EXTENT.height * 4) as usize];
+	let now = std::time::Instant::now();
 	for i in 0..EXTENT.height {
 		for j in 0..EXTENT.width {
-			texels[((i * EXTENT.width + j) * 4 + 0) as usize] =
-				(j as f32 / EXTENT.width as f32 * 255.0) as u8;
-			texels[((i * EXTENT.width + j) * 4 + 1) as usize] =
-				(i as f32 / EXTENT.height as f32 * 255.0) as u8;
-			texels[((i * EXTENT.width + j) * 4 + 2) as usize] = 0;
+			let x = j as f32 / EXTENT.width as f32 * 2.0 - 1.0;
+			let y = i as f32 / EXTENT.height as f32 * 2.0 - 1.0;
+			let ray = sdf::raymarch(
+				sdf::Vector(x, y, -5.0),
+				sdf::Vector(0.0, 0.0, 1.0),
+				sdf::sphere,
+			);
+			texels[((i * EXTENT.width + j) * 4 + 0) as usize] = (ray.pos.0 * 255.0) as u8;
+			texels[((i * EXTENT.width + j) * 4 + 1) as usize] = (ray.pos.1 * 255.0) as u8;
+			texels[((i * EXTENT.width + j) * 4 + 2) as usize] = (ray.pos.2 * 255.0) as u8;
 			texels[((i * EXTENT.width + j) * 4 + 3) as usize] = 255;
 		}
 	}
+	println!("{:?}", now.elapsed().as_millis());
 	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 	queue.write_texture(
 		texture.as_image_copy(),
