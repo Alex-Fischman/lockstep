@@ -1,5 +1,6 @@
 mod sdf;
 
+use sdf::{Vector, SDF};
 use winit::{
 	event::{Event, WindowEvent},
 	event_loop::{ControlFlow, EventLoop},
@@ -44,15 +45,12 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 	});
 	let mut texels = [0xFF; (EXTENT.width * EXTENT.height * 4) as usize];
 	let now = std::time::Instant::now();
+	let sdf = SDF::sphere().scale(0.5).translate(Vector(1.0, 0.0, 0.0));
 	for i in 0..EXTENT.height {
 		for j in 0..EXTENT.width {
 			let x = j as f32 / EXTENT.width as f32 * 2.0 - 1.0;
 			let y = i as f32 / EXTENT.height as f32 * 2.0 - 1.0;
-			let ray = sdf::raymarch(
-				sdf::Vector(x, y, -5.0),
-				sdf::Vector(0.0, 0.0, 1.0),
-				sdf::sphere,
-			);
+			let ray = sdf.raymarch(sdf::Vector(x, y, -5.0), sdf::Vector(0.0, 0.0, 1.0));
 			texels[((i * EXTENT.width + j) * 4 + 0) as usize] = (ray.pos.0 * 255.0) as u8;
 			texels[((i * EXTENT.width + j) * 4 + 1) as usize] = (ray.pos.1 * 255.0) as u8;
 			texels[((i * EXTENT.width + j) * 4 + 2) as usize] = (ray.pos.2 * 255.0) as u8;
