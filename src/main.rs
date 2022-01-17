@@ -45,7 +45,9 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 	});
 	let mut texels = [0xFF; (EXTENT.width * EXTENT.height * 4) as usize];
 	let now = std::time::Instant::now();
-	let sdf = SDF::sphere().scale(0.5).translate(Vector(1.0, 0.0, 0.0));
+	let sdf1 = SDF::sphere().scale(0.5).translate(Vector(0.5, 0.0, 0.0));
+	let sdf2 = SDF::sphere().scale(0.5);
+	let sdf = sdf1.subtract(sdf2);
 	for i in 0..EXTENT.height {
 		for j in 0..EXTENT.width {
 			let x = j as f32 / EXTENT.width as f32 * 2.0 - 1.0;

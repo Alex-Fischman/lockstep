@@ -45,6 +45,9 @@ pub enum SDF {
 	Sphere,
 	Translation(Vector, Box<SDF>),
 	Scaling(Scalar, Box<SDF>),
+	Union(Box<SDF>, Box<SDF>),
+	Intersection(Box<SDF>, Box<SDF>),
+	Subtraction(Box<SDF>, Box<SDF>),
 }
 
 pub struct Ray {
@@ -72,11 +75,26 @@ impl SDF {
 		SDF::Scaling(s, Box::new(self))
 	}
 
+	pub fn unite(self, other: SDF) -> SDF {
+		SDF::Union(Box::new(self), Box::new(other))
+	}
+
+	pub fn intersect(self, other: SDF) -> SDF {
+		SDF::Intersection(Box::new(self), Box::new(other))
+	}
+
+	pub fn subtract(self, other: SDF) -> SDF {
+		SDF::Subtraction(Box::new(self), Box::new(other))
+	}
+
 	fn distance(&self, v: Vector) -> Scalar {
 		match self {
 			SDF::Sphere => v.length() - 1.0,
-			SDF::Translation(t, next) => next.distance(v + -1.0 * *t),
-			SDF::Scaling(s, next) => next.distance(1.0 / s * v) * s,
+			SDF::Translation(t, sdf) => sdf.distance(v + -1.0 * *t),
+			SDF::Scaling(s, sdf) => sdf.distance(1.0 / s * v) * s,
+			SDF::Union(a, b) => a.distance(v).min(b.distance(v)),
+			SDF::Intersection(a, b) => a.distance(v).max(b.distance(v)),
+			SDF::Subtraction(a, b) => (-a.distance(v)).max(b.distance(v)),
 		}
 	}
 
