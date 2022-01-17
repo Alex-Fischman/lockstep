@@ -41,8 +41,10 @@ impl Vector {
 	}
 }
 
-pub struct SDF {
-	distance: Box<dyn Fn(Vector) -> Scalar>,
+pub enum SDF {
+	Sphere,
+	Translation(Vector, Box<SDF>),
+	Scaling(Scalar, Box<SDF>),
 }
 
 pub struct Ray {
@@ -59,22 +61,30 @@ const MAX_ITER: usize = 20;
 
 impl SDF {
 	pub fn sphere() -> SDF {
-		SDF { distance: Box::new(|v: Vector| v.length() - 1.0) }
+		SDF::Sphere
 	}
 
-	pub fn translate(self, translation: Vector) -> SDF {
-		SDF { distance: Box::new(move |v: Vector| (self.distance)(v + -1.0 * translation)) }
+	pub fn translate(self, t: Vector) -> SDF {
+		SDF::Translation(t, Box::new(self))
 	}
 
-	pub fn scale(self, factor: Scalar) -> SDF {
-		SDF { distance: Box::new(move |v: Vector| (self.distance)(1.0 / factor * v) * factor) }
+	pub fn scale(self, s: Scalar) -> SDF {
+		SDF::Scaling(s, Box::new(self))
+	}
+
+	fn distance(&self, v: Vector) -> Scalar {
+		match self {
+			SDF::Sphere => v.length() - 1.0,
+			SDF::Translation(t, next) => next.distance(v + -1.0 * *t),
+			SDF::Scaling(s, next) => next.distance(1.0 / s * v) * s,
+		}
 	}
 
 	pub fn raymarch(&self, pos: Vector, dir: Vector) -> Ray {
 		let mut ray = Ray { pos, dir, min_dist: Scalar::MAX, sum_dist: 0.0, iterations: 0 };
 		ray.dir = ray.dir.normalized().unwrap();
 		loop {
-			let dist = (self.distance)(ray.pos);
+			let dist = self.distance(ray.pos);
 			if dist < MIN_DIST || dist > MAX_DIST || ray.iterations > MAX_ITER {
 				return ray;
 			}
