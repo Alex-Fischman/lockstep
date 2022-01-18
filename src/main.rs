@@ -30,46 +30,28 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 		source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
 	});
 
-	const EXTENT: wgpu::Extent3d =
-		wgpu::Extent3d { width: 256, height: 256, depth_or_array_layers: 1 };
+	let sdf1 = SDF::sphere(0.5).translate(Vector(0.5, 0.0, 0.0));
+	let sdf2 = SDF::sphere(0.5);
+	let sdf = sdf1.subtract(sdf2);
+	let bytes = sdf.to_bytes();
+	let extent = wgpu::Extent3d { width: bytes.len() as u32 / 4, ..wgpu::Extent3d::default() };
 	let texture = device.create_texture(&wgpu::TextureDescriptor {
 		label: None,
-		size: EXTENT,
+		size: extent,
 		mip_level_count: 1,
 		sample_count: 1,
-		dimension: wgpu::TextureDimension::D2,
-		format: wgpu::TextureFormat::Rgba8Unorm,
+		dimension: wgpu::TextureDimension::D1,
+		format: wgpu::TextureFormat::R32Float,
 		usage: wgpu::TextureUsages::TEXTURE_BINDING
 			| wgpu::TextureUsages::RENDER_ATTACHMENT
 			| wgpu::TextureUsages::COPY_DST,
 	});
-	let mut texels = [0xFF; (EXTENT.width * EXTENT.height * 4) as usize];
-	let now = std::time::Instant::now();
-	let sdf1 = SDF::sphere().scale(0.5).translate(Vector(0.5, 0.0, 0.0));
-	let sdf2 = SDF::sphere().scale(0.5);
-	let sdf = sdf1.subtract(sdf2);
-	for i in 0..EXTENT.height {
-		for j in 0..EXTENT.width {
-			let x = j as f32 / EXTENT.width as f32 * 2.0 - 1.0;
-			let y = i as f32 / EXTENT.height as f32 * 2.0 - 1.0;
-			let ray = sdf.raymarch(sdf::Vector(x, y, -5.0), sdf::Vector(0.0, 0.0, 1.0));
-			texels[((i * EXTENT.width + j) * 4 + 0) as usize] = (ray.pos.0 * 255.0) as u8;
-			texels[((i * EXTENT.width + j) * 4 + 1) as usize] = (ray.pos.1 * 255.0) as u8;
-			texels[((i * EXTENT.width + j) * 4 + 2) as usize] = (ray.pos.2 * 255.0) as u8;
-			texels[((i * EXTENT.width + j) * 4 + 3) as usize] = 255;
-		}
-	}
-	println!("{:?}", now.elapsed().as_millis());
 	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 	queue.write_texture(
 		texture.as_image_copy(),
-		&texels,
-		wgpu::ImageDataLayout {
-			offset: 0,
-			bytes_per_row: Some(std::num::NonZeroU32::new(EXTENT.width * 4).unwrap()),
-			rows_per_image: None,
-		},
-		EXTENT,
+		bytes,
+		wgpu::ImageDataLayout::default(),
+		extent,
 	);
 
 	let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -80,7 +62,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 			ty: wgpu::BindingType::Texture {
 				multisampled: false,
 				sample_type: wgpu::TextureSampleType::Float { filterable: false },
-				view_dimension: wgpu::TextureViewDimension::D2,
+				view_dimension: wgpu::TextureViewDimension::D1,
 			},
 			count: None,
 		}],
