@@ -83,41 +83,18 @@ impl SDF {
 		SDF::Subtraction(Box::new(self), Box::new(other))
 	}
 
-	fn to_floats(&self) -> Vec<f32> {
+	fn to_floats(&self) -> Vec<Scalar> {
 		match self {
 			SDF::Sphere(r) => vec![0.0, *r],
-			SDF::Translation(t, a) => {
-				let mut floats = vec![1.0, t.0, t.1, t.2];
-				floats.extend(a.to_floats());
-				floats
-			}
-			SDF::Union(a, b) => {
-				let mut floats = vec![];
-				floats.extend(a.to_floats());
-				floats.extend(b.to_floats());
-				floats.push(2.0);
-				floats
-			}
-			SDF::Intersection(a, b) => {
-				let mut floats = vec![];
-				floats.extend(a.to_floats());
-				floats.extend(b.to_floats());
-				floats.push(3.0);
-				floats
-			}
-			SDF::Subtraction(a, b) => {
-				let mut floats = vec![];
-				floats.extend(a.to_floats());
-				floats.extend(b.to_floats());
-				floats.push(4.0);
-				floats
-			}
+			SDF::Translation(t, a) => vec![vec![1.0, t.0, t.1, t.2], a.to_floats()].concat(),
+			SDF::Union(a, b) => vec![a.to_floats(), b.to_floats(), vec![2.0]].concat(),
+			SDF::Intersection(a, b) => vec![a.to_floats(), b.to_floats(), vec![3.0]].concat(),
+			SDF::Subtraction(a, b) => vec![a.to_floats(), b.to_floats(), vec![4.0]].concat(),
 		}
 	}
 
-	pub fn to_bytes(&self) -> &[u8] {
-		let floats = self.to_floats();
-		unsafe { std::slice::from_raw_parts(floats.as_ptr() as *const u8, floats.len() * 4) }
+	pub fn to_bytes(&self) -> Vec<u8> {
+		self.to_floats().into_iter().map(Scalar::to_le_bytes).flatten().collect()
 	}
 
 	fn distance(&self, v: Vector) -> Scalar {

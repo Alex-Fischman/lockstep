@@ -49,7 +49,7 @@ async fn run(event_loop: EventLoop<()>, window: Window) {
 	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 	queue.write_texture(
 		texture.as_image_copy(),
-		bytes,
+		&bytes,
 		wgpu::ImageDataLayout::default(),
 		extent,
 	);
