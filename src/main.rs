@@ -1,160 +1,155 @@
-mod sdf;
+use sdl2::pixels::Color;
 
-use sdf::{Vector, SDF};
-use winit::{
-	event::{Event, WindowEvent},
-	event_loop::{ControlFlow, EventLoop},
-	window::Window,
-};
+const WIDTH: u32 = 1000;
+const HEIGHT: u32 = 1000;
+const PIXELS: usize = (WIDTH * HEIGHT) as usize;
 
-async fn run(event_loop: EventLoop<()>, window: Window) {
-	let size = window.inner_size();
-	let instance = wgpu::Instance::new(wgpu::Backends::all());
-	let surface = unsafe { instance.create_surface(&window) };
-	let adapter = instance
-		.request_adapter(&wgpu::RequestAdapterOptions {
-			power_preference: wgpu::PowerPreference::default(),
-			force_fallback_adapter: false,
-			compatible_surface: Some(&surface),
-		})
-		.await
-		.expect("Failed to find an appropriate adapter");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+	let sdl = sdl2::init()?;
+	let video = sdl.video()?;
+	let window = video.window("lockstep", WIDTH, WIDTH).position_centered().build()?;
+	let mut canvas = window.into_canvas().build()?;
+	let texture_creator = canvas.texture_creator();
+	let mut texture = texture_creator.create_texture_streaming(None, WIDTH, HEIGHT)?;
+	let mut pixels = [Color::RGB(0, 0, 0); PIXELS];
 
-	let (device, queue) = adapter
-		.request_device(&wgpu::DeviceDescriptor::default(), None)
-		.await
-		.expect("Failed to create device");
-
-	let shader = device.create_shader_module(&wgpu::ShaderModuleDescriptor {
-		label: None,
-		source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-	});
-
-	let sdf1 = SDF::sphere(0.5).translate(Vector(0.5, 0.0, 0.0));
-	let sdf2 = SDF::sphere(0.5);
-	let sdf = sdf1.subtract(sdf2);
-	let bytes = sdf.to_bytes();
-	let extent = wgpu::Extent3d { width: bytes.len() as u32 / 4, ..wgpu::Extent3d::default() };
-	let texture = device.create_texture(&wgpu::TextureDescriptor {
-		label: None,
-		size: extent,
-		mip_level_count: 1,
-		sample_count: 1,
-		dimension: wgpu::TextureDimension::D1,
-		format: wgpu::TextureFormat::R32Float,
-		usage: wgpu::TextureUsages::TEXTURE_BINDING
-			| wgpu::TextureUsages::RENDER_ATTACHMENT
-			| wgpu::TextureUsages::COPY_DST,
-	});
-	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-	queue.write_texture(
-		texture.as_image_copy(),
-		&bytes,
-		wgpu::ImageDataLayout::default(),
-		extent,
-	);
-
-	let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-		label: None,
-		entries: &[wgpu::BindGroupLayoutEntry {
-			binding: 0,
-			visibility: wgpu::ShaderStages::FRAGMENT,
-			ty: wgpu::BindingType::Texture {
-				multisampled: false,
-				sample_type: wgpu::TextureSampleType::Float { filterable: false },
-				view_dimension: wgpu::TextureViewDimension::D1,
-			},
-			count: None,
-		}],
-	});
-	let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-		layout: &bind_group_layout,
-		entries: &[wgpu::BindGroupEntry {
-			binding: 0,
-			resource: wgpu::BindingResource::TextureView(&view),
-		}],
-		label: None,
-	});
-
-	let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-		label: None,
-		bind_group_layouts: &[&bind_group_layout],
-		push_constant_ranges: &[],
-	});
-	let swapchain_format = surface.get_preferred_format(&adapter).unwrap();
-	let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-		label: None,
-		layout: Some(&pipeline_layout),
-		vertex: wgpu::VertexState { module: &shader, entry_point: "vert_main", buffers: &[] },
-		fragment: Some(wgpu::FragmentState {
-			module: &shader,
-			entry_point: "frag_main",
-			targets: &[swapchain_format.into()],
-		}),
-		primitive: wgpu::PrimitiveState::default(),
-		depth_stencil: None,
-		multisample: wgpu::MultisampleState::default(),
-		multiview: None,
-	});
-
-	let mut config = wgpu::SurfaceConfiguration {
-		usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-		format: swapchain_format,
-		width: size.width,
-		height: size.height,
-		present_mode: wgpu::PresentMode::Mailbox,
-	};
-
-	surface.configure(&device, &config);
-
-	event_loop.run(move |event, _, control_flow| {
-		let _ = (&instance, &adapter, &shader, &pipeline_layout);
-		*control_flow = ControlFlow::Wait;
-		match event {
-			Event::WindowEvent { event: WindowEvent::Resized(size), .. } => {
-				config.width = size.width;
-				config.height = size.height;
-				surface.configure(&device, &config);
+	let mut state = State::new();
+	let mut pump = sdl.event_pump()?;
+	'running: loop {
+		for event in pump.poll_iter() {
+			match event {
+				sdl2::event::Event::Quit { .. } => break 'running,
+				_ => {}
 			}
-			Event::RedrawRequested(_) => {
-				let frame = surface
-					.get_current_texture()
-					.expect("Failed to acquire next swap chain texture");
-				let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-				let mut encoder = device
-					.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-				{
-					let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-						label: None,
-						color_attachments: &[wgpu::RenderPassColorAttachment {
-							view: &view,
-							resolve_target: None,
-							ops: wgpu::Operations {
-								load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-								store: true,
-							},
-						}],
-						depth_stencil_attachment: None,
-					});
-					pass.set_pipeline(&render_pipeline);
-					pass.set_bind_group(0, &bind_group, &[]);
-					pass.draw(0..6, 0..2);
-				}
-
-				queue.submit(Some(encoder.finish()));
-				frame.present();
-			}
-			Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-				*control_flow = ControlFlow::Exit
-			}
-			_ => {}
 		}
-	});
+		update(&mut state);
+		render(&state, &mut pixels);
+		texture.update(
+			None,
+			unsafe { std::slice::from_raw_parts(pixels.as_ptr() as *const u8, PIXELS) },
+			std::mem::size_of::<Color>() * WIDTH as usize,
+		)?;
+		canvas.copy(&texture, None, None)?;
+		canvas.present();
+		std::thread::sleep(std::time::Duration::new(0, 1_000_000_000 / 60));
+	}
+
+	Ok(())
 }
 
-fn main() {
-	let event_loop = EventLoop::new();
-	let window = winit::window::Window::new(&event_loop).unwrap();
-	env_logger::init();
-	pollster::block_on(run(event_loop, window));
+#[derive(Clone, Copy, Debug)]
+struct Vector(f64, f64, f64);
+
+impl std::ops::Add for Vector {
+	type Output = Vector;
+	fn add(self, other: Vector) -> Vector {
+		Vector(self.0 + other.0, self.1 + other.1, self.2 + other.2)
+	}
+}
+
+impl std::ops::Sub for Vector {
+	type Output = Vector;
+	fn sub(self, other: Vector) -> Vector {
+		Vector(self.0 - other.0, self.1 - other.1, self.2 - other.2)
+	}
+}
+
+impl std::ops::Mul<Vector> for f64 {
+	type Output = Vector;
+	fn mul(self, other: Vector) -> Vector {
+		Vector(self * other.0, self * other.1, self * other.2)
+	}
+}
+
+#[allow(dead_code)]
+impl Vector {
+	const ZERO: Vector = Vector(0.0, 0.0, 0.0);
+	const X: Vector = Vector(1.0, 0.0, 0.0);
+	const Y: Vector = Vector(0.0, 1.0, 0.0);
+	const Z: Vector = Vector(0.0, 0.0, 1.0);
+
+	fn length(self) -> f64 {
+		(self.0 * self.0 + self.1 * self.1 + self.2 * self.2).sqrt()
+	}
+
+	fn normalized(self) -> Vector {
+		1.0 / self.length() * self
+	}
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Ray {
+	pos: Vector,
+	dir: Vector,
+}
+
+impl Ray {
+	fn new(pos: Vector, dir: Vector) -> Ray {
+		Ray { pos, dir: dir.normalized() }
+	}
+}
+
+struct SDF(Box<dyn Fn(Vector) -> f64>);
+
+impl std::fmt::Debug for SDF {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		write!(f, "SDF")
+	}
+}
+
+impl SDF {
+	fn translate(self, t: Vector) -> SDF {
+		SDF(Box::new(move |v: Vector| self.0(v - t)))
+	}
+}
+
+fn sphere(r: f64) -> SDF {
+	SDF(Box::new(move |v: Vector| v.length() - r))
+}
+
+const DISTANCE_MIN: f64 = 0.001;
+const DISTANCE_MAX: f64 = 100.0;
+const ITERATIONS_MAX: u8 = 20;
+fn raymarch(sdf: &SDF, ray: Ray) -> Option<(f64, u8)> {
+	let mut distance = 0.0;
+	let mut iterations = 0;
+	while distance < DISTANCE_MAX && iterations < ITERATIONS_MAX {
+		match sdf.0(ray.pos + distance * ray.dir) {
+			d if d < DISTANCE_MIN => return Some((distance, iterations)),
+			d => distance += d,
+		}
+		iterations += 1;
+	}
+	None
+}
+
+#[derive(Debug)]
+struct State {
+	scene: SDF,
+}
+
+impl State {
+	fn new() -> State {
+		State { scene: sphere(1.0).translate(Vector(0.5, 0.0, 2.0)) }
+	}
+}
+
+fn update(_state: &mut State) {}
+
+use std::f64::consts::PI;
+const FOV: f64 = PI / 2.0;
+fn render(state: &State, pixels: &mut [Color; PIXELS]) {
+	for x in 0..WIDTH {
+		for y in 0..HEIGHT {
+			let i = (x + y * HEIGHT) as usize;
+			let x = x as f64 / WIDTH as f64 - 0.5;
+			let y = y as f64 / HEIGHT as f64 - 0.5;
+			let z = (PI * 0.5 - FOV * 0.5).tan() * 0.5;
+			let ray = Ray::new(Vector::ZERO, Vector(x, y, z).normalized());
+			pixels[i] = match raymarch(&state.scene, ray) {
+				None => Color::RGB(0, 0, 0),
+				Some((_dist, _iter)) => Color::RGB(255, 255, 255),
+			}
+		}
+	}
 }
