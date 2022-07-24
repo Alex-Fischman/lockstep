@@ -10,8 +10,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let window = video.window("lockstep", WIDTH, WIDTH).position_centered().build()?;
 	let mut canvas = window.into_canvas().build()?;
 	let texture_creator = canvas.texture_creator();
-	let mut texture = texture_creator.create_texture_streaming(None, WIDTH, HEIGHT)?;
-	let mut pixels = [Color::RGB(0, 0, 0); PIXELS];
+	let mut texture = texture_creator.create_texture_streaming(
+		Some(sdl2::pixels::PixelFormatEnum::RGBA32),
+		WIDTH,
+		HEIGHT,
+	)?;
+	let mut pixels = [Color::BLACK; PIXELS];
 	let mut then = std::time::Instant::now();
 	let mut state = State::new();
 	let mut pump = sdl.event_pump()?;
@@ -41,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Vector(f32, f32, f32);
+struct Vector(f64, f64, f64);
 
 impl std::ops::Add for Vector {
 	type Output = Vector;
@@ -57,7 +61,7 @@ impl std::ops::Sub for Vector {
 	}
 }
 
-impl std::ops::Mul<Vector> for f32 {
+impl std::ops::Mul<Vector> for f64 {
 	type Output = Vector;
 	fn mul(self, other: Vector) -> Vector {
 		Vector(self * other.0, self * other.1, self * other.2)
@@ -71,7 +75,7 @@ impl Vector {
 	const Y: Vector = Vector(0.0, 1.0, 0.0);
 	const Z: Vector = Vector(0.0, 0.0, 1.0);
 
-	fn length(self) -> f32 {
+	fn length(self) -> f64 {
 		(self.0 * self.0 + self.1 * self.1 + self.2 * self.2).sqrt()
 	}
 
@@ -92,7 +96,7 @@ impl Ray {
 	}
 }
 
-struct SDF(Box<dyn Fn(Vector) -> f32>);
+struct SDF(Box<dyn Fn(Vector) -> f64>);
 
 impl std::fmt::Debug for SDF {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -101,27 +105,35 @@ impl std::fmt::Debug for SDF {
 }
 
 impl SDF {
-	fn sphere(r: f32) -> SDF {
-		SDF(Box::new(move |v: Vector| v.length() - r))
+	fn sphere() -> SDF {
+		SDF(Box::new(move |v: Vector| v.length() - 1.0))
+	}
+
+	fn union(a: SDF, b: SDF) -> SDF {
+		SDF(Box::new(move |v: Vector| f64::min(a.0(v), b.0(v))))
 	}
 
 	fn translate(self, t: Vector) -> SDF {
 		SDF(Box::new(move |v: Vector| self.0(v - t)))
 	}
+
+	fn scale(self, s: f64) -> SDF {
+		SDF(Box::new(move |v: Vector| self.0(1.0 / s * v) * s))
+	}
 }
 
-const DISTANCE_MIN: f32 = 0.001;
-const DISTANCE_MAX: f32 = 100.0;
-const ITERATIONS_MAX: u8 = 20;
-fn raymarch(sdf: &SDF, ray: Ray) -> Option<(f32, u8)> {
+const DISTANCE_MIN: f64 = 0.01;
+const DISTANCE_MAX: f64 = 10.0;
+const ITERATION_MAX: u64 = 100;
+fn raymarch(sdf: &SDF, ray: Ray) -> Option<(f64, u64)> {
 	let mut distance = 0.0;
-	let mut iterations = 0;
-	while distance < DISTANCE_MAX && iterations < ITERATIONS_MAX {
+	let mut iteration = 0;
+	while distance < DISTANCE_MAX && iteration < ITERATION_MAX {
 		match sdf.0(ray.pos + distance * ray.dir) {
-			d if d < DISTANCE_MIN => return Some((distance, iterations)),
+			d if d < DISTANCE_MIN => return Some((distance, iteration)),
 			d => distance += d,
 		}
-		iterations += 1;
+		iteration += 1;
 	}
 	None
 }
@@ -133,25 +145,30 @@ struct State {
 
 impl State {
 	fn new() -> State {
-		State { scene: SDF::sphere(1.0).translate(Vector(0.5, 0.0, 2.0)) }
+		State {
+			scene: SDF::union(
+				SDF::sphere().translate(Vector(0.5, 0.0, 2.0)),
+				SDF::sphere().scale(0.75).translate(Vector(-1.0, 0.0, 3.0)),
+			),
+		}
 	}
 }
 
 fn update(_state: &mut State) {}
 
-use std::f32::consts::PI;
-const FOV: f32 = PI / 2.0;
+use std::f64::consts::PI;
+const FOV: f64 = PI / 2.0;
 fn render(state: &State, pixels: &mut [Color; PIXELS]) {
 	for x in 0..WIDTH {
 		for y in 0..HEIGHT {
 			let i = (x + y * HEIGHT) as usize;
-			let x = x as f32 / WIDTH as f32 - 0.5;
-			let y = y as f32 / HEIGHT as f32 - 0.5;
+			let x = x as f64 / WIDTH as f64 - 0.5;
+			let y = y as f64 / HEIGHT as f64 - 0.5;
 			let z = (PI * 0.5 - FOV * 0.5).tan() * 0.5;
 			let ray = Ray::new(Vector::ZERO, Vector(x, y, z).normalized());
 			pixels[i] = match raymarch(&state.scene, ray) {
-				None => Color::RGB(0, 0, 0),
-				Some((_dist, _iter)) => Color::RGB(255, 255, 255),
+				None => Color::BLACK,
+				Some((_dist, _iter)) => Color::WHITE,
 			}
 		}
 	}
