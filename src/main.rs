@@ -1,7 +1,7 @@
 use sdl2::pixels::Color;
 
-const WIDTH: u32 = 1000;
-const HEIGHT: u32 = 1000;
+const WIDTH: u32 = 500;
+const HEIGHT: u32 = 500;
 const PIXELS: usize = (WIDTH * HEIGHT) as usize;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,16 +12,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let texture_creator = canvas.texture_creator();
 	let mut texture = texture_creator.create_texture_streaming(None, WIDTH, HEIGHT)?;
 	let mut pixels = [Color::RGB(0, 0, 0); PIXELS];
-
+	let mut then = std::time::Instant::now();
 	let mut state = State::new();
 	let mut pump = sdl.event_pump()?;
-	'running: loop {
+	loop {
 		for event in pump.poll_iter() {
 			match event {
-				sdl2::event::Event::Quit { .. } => break 'running,
+				sdl2::event::Event::Quit { .. } => return Ok(()),
 				_ => {}
 			}
 		}
+
 		update(&mut state);
 		render(&state, &mut pixels);
 		texture.update(
@@ -31,14 +32,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		)?;
 		canvas.copy(&texture, None, None)?;
 		canvas.present();
-		std::thread::sleep(std::time::Duration::new(0, 1_000_000_000 / 60));
-	}
 
-	Ok(())
+		let now = std::time::Instant::now();
+		let delta = now - then;
+		then = now;
+		println!("{:?}", delta);
+	}
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Vector(f64, f64, f64);
+struct Vector(f32, f32, f32);
 
 impl std::ops::Add for Vector {
 	type Output = Vector;
@@ -54,7 +57,7 @@ impl std::ops::Sub for Vector {
 	}
 }
 
-impl std::ops::Mul<Vector> for f64 {
+impl std::ops::Mul<Vector> for f32 {
 	type Output = Vector;
 	fn mul(self, other: Vector) -> Vector {
 		Vector(self * other.0, self * other.1, self * other.2)
@@ -68,7 +71,7 @@ impl Vector {
 	const Y: Vector = Vector(0.0, 1.0, 0.0);
 	const Z: Vector = Vector(0.0, 0.0, 1.0);
 
-	fn length(self) -> f64 {
+	fn length(self) -> f32 {
 		(self.0 * self.0 + self.1 * self.1 + self.2 * self.2).sqrt()
 	}
 
@@ -89,7 +92,7 @@ impl Ray {
 	}
 }
 
-struct SDF(Box<dyn Fn(Vector) -> f64>);
+struct SDF(Box<dyn Fn(Vector) -> f32>);
 
 impl std::fmt::Debug for SDF {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -98,19 +101,19 @@ impl std::fmt::Debug for SDF {
 }
 
 impl SDF {
+	fn sphere(r: f32) -> SDF {
+		SDF(Box::new(move |v: Vector| v.length() - r))
+	}
+
 	fn translate(self, t: Vector) -> SDF {
 		SDF(Box::new(move |v: Vector| self.0(v - t)))
 	}
 }
 
-fn sphere(r: f64) -> SDF {
-	SDF(Box::new(move |v: Vector| v.length() - r))
-}
-
-const DISTANCE_MIN: f64 = 0.001;
-const DISTANCE_MAX: f64 = 100.0;
+const DISTANCE_MIN: f32 = 0.001;
+const DISTANCE_MAX: f32 = 100.0;
 const ITERATIONS_MAX: u8 = 20;
-fn raymarch(sdf: &SDF, ray: Ray) -> Option<(f64, u8)> {
+fn raymarch(sdf: &SDF, ray: Ray) -> Option<(f32, u8)> {
 	let mut distance = 0.0;
 	let mut iterations = 0;
 	while distance < DISTANCE_MAX && iterations < ITERATIONS_MAX {
@@ -130,20 +133,20 @@ struct State {
 
 impl State {
 	fn new() -> State {
-		State { scene: sphere(1.0).translate(Vector(0.5, 0.0, 2.0)) }
+		State { scene: SDF::sphere(1.0).translate(Vector(0.5, 0.0, 2.0)) }
 	}
 }
 
 fn update(_state: &mut State) {}
 
-use std::f64::consts::PI;
-const FOV: f64 = PI / 2.0;
+use std::f32::consts::PI;
+const FOV: f32 = PI / 2.0;
 fn render(state: &State, pixels: &mut [Color; PIXELS]) {
 	for x in 0..WIDTH {
 		for y in 0..HEIGHT {
 			let i = (x + y * HEIGHT) as usize;
-			let x = x as f64 / WIDTH as f64 - 0.5;
-			let y = y as f64 / HEIGHT as f64 - 0.5;
+			let x = x as f32 / WIDTH as f32 - 0.5;
+			let y = y as f32 / HEIGHT as f32 - 0.5;
 			let z = (PI * 0.5 - FOV * 0.5).tan() * 0.5;
 			let ray = Ray::new(Vector::ZERO, Vector(x, y, z).normalized());
 			pixels[i] = match raymarch(&state.scene, ray) {
