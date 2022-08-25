@@ -105,7 +105,6 @@ enum SDF<'a> {
 	Sphere(f64),
 	Union(&'a SDF<'a>, &'a SDF<'a>),
 	Translate(&'a SDF<'a>, Vector),
-	Extrude(&'a SDF<'a>, Vector),
 }
 
 #[allow(dead_code)]
@@ -118,22 +117,6 @@ impl<'a> SDF<'a> {
 			SDF::Sphere(r) => v.length() - r,
 			SDF::Union(a, b) => f64::min(a.run(v), b.run(v)),
 			SDF::Translate(a, u) => a.run(v - *u),
-			SDF::Extrude(a, u) => {
-				let ray = Ray::new(v, -*u);
-				let mut min_dist = f64::MAX;
-				let mut distance = 0.0;
-				let mut iteration = 0;
-				while min_dist > SDF::DISTANCE_MIN
-					&& distance < SDF::DISTANCE_MAX.min(u.length())
-					&& iteration < SDF::ITERATION_MAX
-				{
-					let d = a.run(ray.pos + distance * ray.dir);
-					min_dist = min_dist.min(d);
-					distance += d.abs();
-					iteration += 1;
-				}
-				min_dist
-			}
 		}
 	}
 
@@ -162,10 +145,7 @@ impl<'a> SDF<'a> {
 use std::f64::consts::PI;
 const FOV: f64 = PI / 2.0;
 fn render(pixels: &mut [Color; PIXELS]) {
-	let a = SDF::Sphere(0.01).translate(Vector::Z);
-	let b = SDF::Extrude(&a, Vector::X);
-	let c = SDF::Extrude(&b, Vector::Y);
-	let scene = c;
+	let scene = SDF::Sphere(0.5).translate(Vector::Z);
 	for x in 0..WIDTH {
 		for y in 0..HEIGHT {
 			let i = (x + y * HEIGHT) as usize;
