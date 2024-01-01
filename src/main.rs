@@ -1,162 +1,292 @@
-use sdl2::pixels::Color;
+//! Demo for a Shipyard game
 
-const WIDTH: u32 = 500;
-const HEIGHT: u32 = 500;
-const PIXELS: usize = (WIDTH * HEIGHT) as usize;
+#![deny(missing_docs)]
+#![deny(clippy::pedantic)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::wildcard_imports)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_truncation)]
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-	let sdl = sdl2::init()?;
-	let mut pump = sdl.event_pump()?;
-	let video = sdl.video()?;
-	let window = video.window("lockstep", WIDTH, WIDTH).position_centered().build()?;
-	let mut canvas = window.into_canvas().build()?;
-	let texture_creator = canvas.texture_creator();
-	let mut texture = texture_creator.create_texture_streaming(
-		Some(sdl2::pixels::PixelFormatEnum::RGBA32),
-		WIDTH,
-		HEIGHT,
-	)?;
-	let mut pixels = [Color::BLACK; PIXELS];
+mod math;
+mod sdf;
 
-	let then = std::time::Instant::now();
-	render(&mut pixels);
-	let now = std::time::Instant::now();
-	println!("{:?}", now - then);
+pub use std::collections::HashMap;
+pub use wgpu::Color;
+pub use {math::*, sdf::*};
 
-	texture.update(
-		None,
-		unsafe { std::slice::from_raw_parts(pixels.as_ptr() as *const u8, PIXELS) },
-		std::mem::size_of::<Color>() * WIDTH as usize,
-	)?;
-	canvas.copy(&texture, None, None)?;
-	canvas.present();
-
-	loop {
-		for event in pump.poll_iter() {
-			match event {
-				sdl2::event::Event::Quit { .. } => return Ok(()),
-				_ => {}
-			}
-		}
-	}
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct Camera {
+    pos: Vec3,
+    dir: Vec3,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Vector(f64, f64, f64);
+#[repr(C)]
+struct GpuUniforms {
+    window_width: f32,
+    window_height: f32,
+    seconds: f32,
 
-impl std::ops::Add for Vector {
-	type Output = Vector;
-	fn add(self, other: Vector) -> Vector {
-		Vector(self.0 + other.0, self.1 + other.1, self.2 + other.2)
-	}
+    min_dist: f32,
+    max_dist: f32,
+    max_iter: u32,
+
+    camera: Camera,
 }
 
-impl std::ops::Sub for Vector {
-	type Output = Vector;
-	fn sub(self, other: Vector) -> Vector {
-		Vector(self.0 - other.0, self.1 - other.1, self.2 - other.2)
-	}
+unsafe fn to_byte_slice<T>(x: &T, size: usize) -> &[u8] {
+    std::slice::from_raw_parts((x as *const T).cast::<u8>(), size)
 }
 
-impl std::ops::Neg for Vector {
-	type Output = Vector;
-	fn neg(self) -> Vector {
-		Vector(-self.0, -self.1, -self.2)
-	}
-}
+#[allow(clippy::semicolon_if_nothing_returned)] // pollster macro trips this lint
+#[pollster::main]
+async fn main() {
+    // winit
+    let event_loop = winit::event_loop::EventLoop::new().unwrap();
+    let window = winit::window::Window::new(&event_loop).unwrap();
+    window.set_title("The Shipyard");
 
-impl std::ops::Mul<Vector> for f64 {
-	type Output = Vector;
-	fn mul(self, other: Vector) -> Vector {
-		Vector(self * other.0, self * other.1, self * other.2)
-	}
-}
+    // wgpu
+    let instance = wgpu::Instance::default();
+    let surface = unsafe { instance.create_surface(&window) }.unwrap();
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::default(),
+            force_fallback_adapter: false,
+            compatible_surface: Some(&surface),
+        })
+        .await
+        .unwrap();
+    let (device, queue) = adapter
+        .request_device(
+            &wgpu::DeviceDescriptor {
+                label: None,
+                features: wgpu::Features::empty(),
+                limits: wgpu::Limits::default(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
 
-#[allow(dead_code)]
-impl Vector {
-	const ZERO: Vector = Vector(0.0, 0.0, 0.0);
-	const X: Vector = Vector(1.0, 0.0, 0.0);
-	const Y: Vector = Vector(0.0, 1.0, 0.0);
-	const Z: Vector = Vector(0.0, 0.0, 1.0);
+    // wgpu (pipeline)
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::from(include_str!("shader.wgsl"))),
+    });
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                count: None,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                count: None,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                count: None,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+            },
+        ],
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[&bind_group_layout],
+        push_constant_ranges: &[],
+    });
+    let format = surface.get_capabilities(&adapter).formats[0];
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: "vertex",
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: "fragment",
+            targets: &[Some(format.into())],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+    });
 
-	fn length(self) -> f64 {
-		(self.0 * self.0 + self.1 * self.1 + self.2 * self.2).sqrt()
-	}
+    // shipyard
+    let mut input = winit_input_helper::WinitInputHelper::new();
+    let mut timer = std::time::Instant::now();
+    let mut seconds = 0.0;
+    let mut camera = Camera {
+        pos: ORIGIN,
+        dir: Z,
+    };
 
-	fn normalized(self) -> Vector {
-		1.0 / self.length() * self
-	}
-}
+    let scene = Sdf::sphere(1.0, Material::Flat(Color::RED))
+        .union(Sdf::sphere(1.0, Material::Flat(Color::GREEN)).translate(X));
 
-#[derive(Clone, Copy, Debug)]
-struct Ray {
-	pos: Vector,
-	dir: Vector,
-}
+    event_loop
+        .run(|event, window_target| {
+            if input.update(&event) {
+                if input.close_requested() || input.destroyed() {
+                    window_target.exit();
+                }
 
-impl Ray {
-	fn new(pos: Vector, dir: Vector) -> Ray {
-		Ray { pos, dir: dir.normalized() }
-	}
-}
+                // update
+                let delta = timer.elapsed();
+                timer = std::time::Instant::now();
+                seconds += delta.as_secs_f32();
 
-#[derive(Debug)]
-enum SDF<'a> {
-	Sphere(f64),
-	Union(&'a SDF<'a>, &'a SDF<'a>),
-	Translate(&'a SDF<'a>, Vector),
-}
+                let angle = seconds * (2.0 * PI) * 0.1;
+                camera.pos = Vec3 {
+                    x: angle.cos(),
+                    y: angle.sin(),
+                    z: -5.0,
+                };
 
-#[allow(dead_code)]
-impl<'a> SDF<'a> {
-	const ITERATION_MAX: u64 = 100;
-	const DISTANCE_MIN: f64 = 0.01;
-	const DISTANCE_MAX: f64 = 10.0;
-	fn run(&self, v: Vector) -> f64 {
-		match self {
-			SDF::Sphere(r) => v.length() - r,
-			SDF::Union(a, b) => f64::min(a.run(v), b.run(v)),
-			SDF::Translate(a, u) => a.run(v - *u),
-		}
-	}
+                // render
+                let size = window.inner_size();
+                surface.configure(
+                    &device,
+                    &wgpu::SurfaceConfiguration {
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                        format,
+                        width: size.width.max(1),
+                        height: size.height.max(1),
+                        present_mode: wgpu::PresentMode::Fifo,
+                        alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                        view_formats: vec![],
+                    },
+                );
 
-	fn union(&'a self, other: &'a SDF) -> SDF<'a> {
-		SDF::Union(self, other)
-	}
+                let uniforms_data = GpuUniforms {
+                    window_width: size.width as f32,
+                    window_height: size.height as f32,
+                    seconds,
+                    min_dist: MIN_DIST,
+                    max_dist: MAX_DIST,
+                    max_iter: MAX_ITER as u32,
+                    camera,
+                };
+                let (distances_data, materials_data) = scene.to_gpu_repr();
 
-	fn translate(&'a self, t: Vector) -> SDF<'a> {
-		SDF::Translate(self, t)
-	}
+                let uniforms_size = std::mem::size_of::<GpuUniforms>();
+                let uniforms_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: None,
+                    size: uniforms_size as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                queue.write_buffer(&uniforms_buffer, 0, unsafe {
+                    to_byte_slice(&uniforms_data, uniforms_size)
+                });
 
-	fn raymarch(&self, ray: Ray) -> Option<(f64, u64)> {
-		let mut distance = 0.0;
-		let mut iteration = 0;
-		while distance < SDF::DISTANCE_MAX && iteration < SDF::ITERATION_MAX {
-			match self.run(ray.pos + distance * ray.dir) {
-				d if d < SDF::DISTANCE_MIN => return Some((distance, iteration)),
-				d => distance += d,
-			}
-			iteration += 1;
-		}
-		None
-	}
-}
+                let distances_size = std::mem::size_of::<GpuDistance>() * distances_data.len();
+                let distances_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: None,
+                    size: distances_size as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                queue.write_buffer(&distances_buffer, 0, unsafe {
+                    to_byte_slice(&distances_data[0], distances_size)
+                });
 
-use std::f64::consts::PI;
-const FOV: f64 = PI / 2.0;
-fn render(pixels: &mut [Color; PIXELS]) {
-	let scene = SDF::Sphere(0.5).translate(Vector::Z);
-	for x in 0..WIDTH {
-		for y in 0..HEIGHT {
-			let i = (x + y * HEIGHT) as usize;
-			let x = x as f64 / WIDTH as f64 - 0.5;
-			let y = y as f64 / HEIGHT as f64 - 0.5;
-			let z = (PI * 0.5 - FOV * 0.5).tan() * 0.5;
-			let ray = Ray::new(Vector::ZERO, Vector(x, y, z).normalized());
-			pixels[i] = match scene.raymarch(ray) {
-				None => Color::BLACK,
-				Some((_dist, _iter)) => Color::WHITE,
-			}
-		}
-	}
+                let materials_size = std::mem::size_of::<GpuMaterial>() * materials_data.len();
+                let materials_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: None,
+                    size: materials_size as u64,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                queue.write_buffer(&materials_buffer, 0, unsafe {
+                    to_byte_slice(&materials_data[0], materials_size)
+                });
+
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &uniforms_buffer,
+                                offset: 0,
+                                size: None,
+                            }),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &distances_buffer,
+                                offset: 0,
+                                size: None,
+                            }),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &materials_buffer,
+                                offset: 0,
+                                size: None,
+                            }),
+                        },
+                    ],
+                });
+
+                let frame = surface.get_current_texture().unwrap();
+                let view = frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                let mut encoder =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: None,
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    pass.set_pipeline(&pipeline);
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    pass.draw(0..3, 0..1);
+                }
+                queue.submit([encoder.finish()]);
+                frame.present();
+
+                window.request_redraw();
+            }
+        })
+        .unwrap();
 }

@@ -1,8 +1,12 @@
 [package]
 name = "lockstep"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Alex Fischman <alex@fischman.org>"]
 edition = "2021"
 
 [dependencies]
-sdl2 = "0.35.2"
+pollster = { version = "0.3.0", features = ["macro"] }
+wgpu = "0.18.0"
+winit = { version = "0.29.7", features = ["rwh_05"] }
+winit_input_helper = "0.15.1"
+
